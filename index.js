@@ -3,16 +3,28 @@ const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
 const {init: initDB, Counter} = require("./db");
+const {Configuration, OpenAIApi} = require('openai');
 
 const logger = morgan("tiny");
 const request = require('request')
+const {sleep, strip} = require('./utils');
 
 const app = express();
 app.use(express.urlencoded({extended: false}));
 app.use(express.json());
 app.use(cors());
 app.use(logger);
+const {
+    Message,
+    MESSAGE_STATUS_ANSWERED,
+    MESSAGE_STATUS_THINKING,
+    AI_TYPE_TEXT,
+    AI_TYPE_IMAGE,
+} = require('./db');
+const AI_IMAGE_KEY = '作画';
 
+const AI_THINKING_MESSAGE = '我已经在编了，请稍等几秒后复制原文再说一遍~';
+const LIMIT_AI_TEXT_COUNT = 10;
 const configuration = new Configuration({
     apiKey: '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',
     basePath: 'http://43.153.15.174/v1'
@@ -27,10 +39,9 @@ async function getAIIMAGE(prompt) {
         size: '1024x1024',
     });
 
-    const imageURL = response?.data?.data?.[0].url || 'AI 作画挂了';
-
-    return imageURL;
+    return response?.data?.data?.[0].url || 'AI 作画挂了';
 }
+
 // 首页
 app.get("/", async (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
@@ -110,6 +121,7 @@ async function buildCtxPrompt({FromUserName}) {
             .map(({response, request}) => `Q: ${request}\n A: ${response}`)
             .join('\n');
 }
+
 async function getAIResponse(prompt) {
     const completion = await openai.createCompletion({
         model: 'text-davinci-003',
@@ -216,28 +228,6 @@ app.post("/message/post", async (req, res) => {
         return;
     }
 
-    if ((Content || '').startsWith(CLEAR_KEY)) {
-        const clearType = Content.startsWith(CLEAR_KEY_IMAGE)
-            ? AI_TYPE_IMAGE
-            : AI_TYPE_TEXT;
-        const FromUserName = Content.substring(CLEAR_KEY_TEXT.length);
-        const count = await Message.destroy({
-            where: {
-                fromUser: FromUserName,
-                aiType: {
-                    [Op.or]: [clearType, null],
-                },
-            },
-        });
-        res.send({
-            ToUserName: FromUserName,
-            FromUserName: ToUserName,
-            CreateTime: CreateTime,
-            MsgType: 'text',
-            Content: `已重置用户共 ${count} 条消息`,
-        })
-        return;
-    }
 
     const message = await Promise.race([
         // 3秒微信服务器就会超时，超过2.8秒要提示用户重试
