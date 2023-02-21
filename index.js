@@ -13,6 +13,24 @@ app.use(express.json());
 app.use(cors());
 app.use(logger);
 
+const configuration = new Configuration({
+    apiKey: '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',
+    basePath: 'http://43.153.15.174/v1'
+});
+
+const openai = new OpenAIApi(configuration);
+
+async function getAIIMAGE(prompt) {
+    const response = await openai.createImage({
+        prompt: prompt,
+        n: 1,
+        size: '1024x1024',
+    });
+
+    const imageURL = response?.data?.data?.[0].url || 'AI 作画挂了';
+
+    return imageURL;
+}
 // 首页
 app.get("/", async (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
@@ -75,6 +93,35 @@ app.post("/message/simple", async (req, res) => {
     }
 })
 
+async function buildCtxPrompt({FromUserName}) {
+    // 获取最近对话
+    const messages = await Message.findAll({
+        where: {
+            fromUser: FromUserName,
+            aiType: AI_TYPE_TEXT,
+        },
+        limit: LIMIT_AI_TEXT_COUNT,
+        order: [['updatedAt', 'ASC']],
+    });
+    // 只有一条的时候，就不用封装上下文了
+    return messages.length === 1
+        ? messages[0].request
+        : messages
+            .map(({response, request}) => `Q: ${request}\n A: ${response}`)
+            .join('\n');
+}
+async function getAIResponse(prompt) {
+    const completion = await openai.createCompletion({
+        model: 'text-davinci-003',
+        prompt,
+        max_tokens: 1024,
+        temperature: 0.1,
+    });
+
+    const response = (completion?.data?.choices?.[0].text || 'AI 挂了').trim();
+
+    return strip(response, ['\n', 'A: ']);
+}
 
 // 获取 AI 回复消息
 async function getAIMessage({Content, FromUserName}) {
@@ -197,7 +244,7 @@ app.post("/message/post", async (req, res) => {
         sleep(2800).then(() => AI_THINKING_MESSAGE),
         getAIMessage({Content, FromUserName}),
     ]);
-
+    console.log(message)
     res.send({
         ToUserName: FromUserName,
         FromUserName: ToUserName,
