@@ -52,6 +52,7 @@ function sendmess(appid, mess) {
     })
 }
 
+//需要有微信认证
 app.post("/message/simple", async (req, res) => {
     console.log('消息推送', req.body)
     // 从 header 中取appid，如果 from-appid 不存在，则不是资源复用场景，可以直接传空字符串，使用环境所属账号发起云调用
@@ -72,6 +73,138 @@ app.post("/message/simple", async (req, res) => {
     } else {
         res.send('success')
     }
+})
+
+
+// 获取 AI 回复消息
+async function getAIMessage({Content, FromUserName}) {
+    // 找一下，是否已有记录
+    const message = await Message.findOne({
+        where: {
+            fromUser: FromUserName,
+            request: Content,
+        },
+    });
+
+    // 已回答，直接返回消息
+    if (message?.status === MESSAGE_STATUS_ANSWERED) {
+        return `${message?.response}`;
+    }
+
+    // 在回答中
+    if (message?.status === MESSAGE_STATUS_THINKING) {
+        return AI_THINKING_MESSAGE;
+    }
+
+    const aiType = Content.startsWith(AI_IMAGE_KEY)
+        ? AI_TYPE_IMAGE
+        : AI_TYPE_TEXT;
+
+
+    // 没超过限制时，正常走AI链路
+    // 因为AI响应比较慢，容易超时，先插入一条记录，维持状态，待后续更新记录。
+    await Message.create({
+        fromUser: FromUserName,
+        response: '',
+        request: Content,
+        aiType,
+    });
+
+    let response = '';
+
+    if (aiType === AI_TYPE_TEXT) {
+        // 构建带上下文的 prompt
+        const prompt = await buildCtxPrompt({Content, FromUserName});
+
+        // 请求远程消息
+        response = await getAIResponse(prompt);
+    }
+
+    if (aiType === AI_TYPE_IMAGE) {
+        // 去掉开始前的关键词
+        const prompt = Content.substring(AI_IMAGE_KEY.length);
+        // 请求远程消息
+        response = await getAIIMAGE(prompt);
+    }
+
+    // 成功后，更新记录
+    await Message.update(
+        {
+            response: response,
+            status: MESSAGE_STATUS_ANSWERED,
+        },
+        {
+            where: {
+                fromUser: FromUserName,
+                request: Content,
+            },
+        },
+    );
+
+    return `${response}`;
+}
+
+app.post("/message/post", async (req, res) => {
+    const {ToUserName, FromUserName, MsgType, Content, CreateTime} = req.body
+
+    if (!FromUserName) {
+        res.send({
+            ToUserName: FromUserName,
+            FromUserName: ToUserName,
+            CreateTime: CreateTime,
+            MsgType: 'text',
+            Content: '无用户信息',
+        })
+        return;
+    }
+
+    if ((Content || '').trim() === '获取id') {
+        res.send({
+            ToUserName: FromUserName,
+            FromUserName: ToUserName,
+            CreateTime: CreateTime,
+            MsgType: 'text',
+            Content: FromUserName,
+        })
+        return;
+    }
+
+    if ((Content || '').startsWith(CLEAR_KEY)) {
+        const clearType = Content.startsWith(CLEAR_KEY_IMAGE)
+            ? AI_TYPE_IMAGE
+            : AI_TYPE_TEXT;
+        const FromUserName = Content.substring(CLEAR_KEY_TEXT.length);
+        const count = await Message.destroy({
+            where: {
+                fromUser: FromUserName,
+                aiType: {
+                    [Op.or]: [clearType, null],
+                },
+            },
+        });
+        res.send({
+            ToUserName: FromUserName,
+            FromUserName: ToUserName,
+            CreateTime: CreateTime,
+            MsgType: 'text',
+            Content: `已重置用户共 ${count} 条消息`,
+        })
+        return;
+    }
+
+    const message = await Promise.race([
+        // 3秒微信服务器就会超时，超过2.8秒要提示用户重试
+        sleep(2800).then(() => AI_THINKING_MESSAGE),
+        getAIMessage({Content, FromUserName}),
+    ]);
+
+    res.send({
+        ToUserName: FromUserName,
+        FromUserName: ToUserName,
+        CreateTime: +new Date(),
+        MsgType: 'text',
+        Content: message,
+    })
 })
 
 // 获取计数
