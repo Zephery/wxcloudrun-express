@@ -26,7 +26,7 @@ const AI_IMAGE_KEY = '作画';
 const AI_THINKING_MESSAGE = '我已经在编了，请稍等几秒后复制原文再说一遍~';
 const LIMIT_AI_TEXT_COUNT = 10;
 const configuration = new Configuration({
-    apiKey: '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',
+    apiKey: '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',
     basePath: 'http://43.153.15.174/v1'
 });
 

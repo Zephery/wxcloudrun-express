@@ -4,7 +4,7 @@ Content-Type: application/json
 {
   "ToUserName": "oie",
   "FromUserName": "jofwaejo",
-  "Content": "你好啊!",
+  "Content": "写一篇200字关于上海的文章",
   "CreateTime": 313
 }
 
